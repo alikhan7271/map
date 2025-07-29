@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#007bff">
+  <title>Nosoz Kameralar Yo'nalishi</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body, html { 
+      margin: 0; 
+      padding: 0; 
+      height: 100%; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    
+    // GPS aniqlik ma'lumotini yangilash
+    function updateGPSAccuracy(accuracy) {
+      let accuracyText = '';
+      let accuracyColor = '';
+      
+      if (accuracy <= 5) {
+        accuracyText = `✅ Juda aniq (±${accuracy.toFixed(1)}m)`;
+        accuracyColor = '#28a745';
+      } else if (accuracy <= 10) {
+        accuracyText = `🟡 Yaxshi (±${accuracy.toFixed(1)}m)`;
+        accuracyColor = '#ffc107';
+      } else if (accuracy <= 20) {
+        accuracyText = `🟠 O'rtacha (±${accuracy.toFixed(1)}m)`;
+        accuracyColor = '#fd7e14';
+      } else {
+        accuracyText = `🔴 Zaif (±${accuracy.toFixed(1)}m)`;
+        accuracyColor = '#dc3545';
+      }
+      
+      elements.gpsAccuracy.innerHTML = `<span style="color: ${accuracyColor};">${accuracyText}</span>`;
+    }
+    
+    // Yaqin kameralarni tekshirish
+    function checkNearbyCamera(userLat, userLng) {
+      locations.forEach(location => {
+        const distance = calculateDistance(userLat, userLng, location.lat, location.lng);
+        
+        if (distance < 30 && !location.notified) { // 30 metr yaqinlashganda
+          location.notified = true;
+          showTemporaryMessage(`📹 ${location.name} kamerasiga yaqinlashdingiz (${distance.toFixed(0)}m)`, 'info');
+          
+          // 5 soniyadan keyin notification flagini reset qilish
+          setTimeout(() => {
+            location.notified = false;
+          }, 30000);
+        }
+      });
+    }
+    
+    // Ikki nuqta orasidagi masofani hisoblash (metrda)
+    function calculateDistance(lat1, lng1, lat2, lng2) {
+      const R = 6371000; // Yer radiusi metrda
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLng/2) * Math.sin(dLng/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+    
+    #map { 
+      height: 100%; 
+      width: 100%; 
+    }
+    
+    .control-panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      padding: 12px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      z-index: 1000;
+      max-width: 350px;
+      font-size: 13px;
+    }
+    
+    @media (max-width: 480px) {
+      .control-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        border-radius: 0 0 12px 12px;
+        max-height: 50vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+    }
+    
+    .file-input-wrapper {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+      margin-bottom: 10px;
+    }
+    
+    .file-input {
+      width: 100%;
+      padding: 12px;
+      border: 2px dashed #ccc;
+      border-radius: 8px;
+      background: #f9f9f9;
+      cursor: pointer;
+      font-size: 13px;
+      min-height: 44px;
+      -webkit-appearance: none;
+    }
+    
+    .file-input:hover {
+      border-color: #007bff;
+      background: #f0f8ff;
+    }
+    
+    .btn {
+      padding: 12px 16px;
+      margin: 8px 0;
+      width: 100%;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      touch-action: manipulation;
+      -webkit-appearance: none;
+      min-height: 44px; /* iOS touch target */
+    }
+    
+    .btn-primary {
+      background-color: #007bff;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background-color: #0056b3;
+    }
+    
+    .btn-success {
+      background-color: #28a745;
+      color: white;
+    }
+    
+    .btn-success:hover {
+      background-color: #1e7e34;
+    }
+    
+    .btn-warning {
+      background-color: #ffc107;
+      color: black;
+    }
+    
+    .btn-warning:hover {
+      background-color: #e0a800;
+    }
+    
+    .btn:disabled {
+      background-color: #6c757d;
+      cursor: not-allowed;
+    }
+    
+    .status-info {
+      margin: 8px 0;
+      padding: 10px;
+      background: linear-gradient(135deg, #e7f3ff 0%, #f0f8ff 100%);
+      border-radius: 8px;
+      font-size: 12px;
+      border-left: 4px solid #007bff;
+    }
+    
+    /* Mobile optimizations */
+    @media (max-width: 768px) {
+      .control-panel h3 {
+        font-size: 16px;
+        margin-bottom: 10px;
+      }
+      
+      .btn {
+        font-size: 15px;
+        padding: 14px 16px;
+      }
+      
+      .status-info {
+        font-size: 13px;
+      }
+    }
+    
+    /* Landscape mode adjustments */
+    @media (max-height: 500px) and (orientation: landscape) {
+      .control-panel {
+        max-height: 40vh;
+        font-size: 12px;
+      }
+      
+      .btn {
+        padding: 8px 12px;
+        margin: 4px 0;
+        min-height: 36px;
+      }
+    }
+    
+    .error-message {
+      background: #ffe6e6;
+      color: #d32f2f;
+      padding: 8px;
+      border-radius: 5px;
+      margin: 5px 0;
+      font-size: 12px;
+    }
+    
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 10px;
+    }
+    
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #3498db;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="control-panel">
+    <h3 style="margin-top: 0; color: #333; text-align: center;">📹 Nosoz Kameralar</h3>
+    
+    <div class="file-input-wrapper">
+      <input type="file" id="excelFile" accept=".xlsx,.xls" class="file-input" />
+      <small style="color: #666;">📄 Excel fayl tanlang (xlsx, xls)</small>
+    </div>
+    
+    <div class="loading" id="loadingIndicator">
+      <div class="spinner"></div>
+      <span>Yuklanmoqda...</span>
+    </div>
+    
+    <div id="errorContainer"></div>
+    
+    <div class="status-info" id="statusInfo">
+      <strong>Holat:</strong> Fayl yuklanmagan
+    </div>
+    
+    <button class="btn btn-primary" id="nextBtn" onclick="nextPoint()" disabled>
+      ➡️ Keyingisi (<span id="currentIndex">0</span>/<span id="totalCount">0</span>)
+    </button>
+    
+    <button class="btn btn-success" id="startBtn" onclick="startNavigation()" disabled>
+      🧭 Yo'nalishni Boshlash
+    </button>
+    
+    <button class="btn btn-warning" id="resetBtn" onclick="resetNavigation()">
+      🔄 Qayta Boshlash
+    </button>
+    
+    <div class="status-info">
+      <strong>📍 Joriy manzil:</strong>
+      <div id="currentAddress" style="margin-top: 4px; color: #555;">-</div>
+    </div>
+    
+    <!-- Kamera ma'lumotlari -->
+    <div id="cameraInfo" style="display: none; background: #f8f9fa; padding: 10px; border-radius: 8px; margin: 8px 0; border-left: 4px solid #28a745;">
+      <h4 style="margin: 0 0 8px 0; color: #333;">📹 Kamera Ma'lumotlari</h4>
+      <div id="cameraDetails"></div>
+    </div>
+    
+    <!-- GPS aniqlik ma'lumoti -->
+    <div class="status-info" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); border-left-color: #ffc107;">
+      <strong>🛰️ GPS Aniqlik:</strong>
+      <div id="gpsAccuracy">Aniqlanmoqda...</div>
+    </div>
+    
+    <!-- Collapse/Expand button for mobile -->
+    <button class="btn" id="togglePanel" onclick="toggleControlPanel()" style="background: #f8f9fa; color: #333; display: none;">
+      📱 Yashirish/Ko'rsatish
+    </button>
+  </div>
+  
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <script>
+    // Global o'zgaruvchilar
+    let map = L.map('map').setView([41.3111, 69.2797], 13);
+    let routeControl = null;
+    let currentIndex = 0;
+    let locations = [];
+    let userMarker = null;
+    let locationMarkers = [];
+    let isNavigationActive = false;
+    let watchId = null;
+
+    // Xarita sozlamalari
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // DOM elementlari
+    const elements = {
+      fileInput: document.getElementById('excelFile'),
+      nextBtn: document.getElementById('nextBtn'),
+      startBtn: document.getElementById('startBtn'),
+      resetBtn: document.getElementById('resetBtn'),
+      statusInfo: document.getElementById('statusInfo'),
+      currentIndex: document.getElementById('currentIndex'),
+      totalCount: document.getElementById('totalCount'),
+      currentAddress: document.getElementById('currentAddress'),
+      loadingIndicator: document.getElementById('loadingIndicator'),
+      errorContainer: document.getElementById('errorContainer'),
+      cameraInfo: document.getElementById('cameraInfo'),
+      cameraDetails: document.getElementById('cameraDetails'),
+      gpsAccuracy: document.getElementById('gpsAccuracy')
+    };
+
+    // Event listeners
+    elements.fileInput.addEventListener('change', handleFile);
+
+    // Error handling funksiyasi
+    function showError(message) {
+      elements.errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+      setTimeout(() => {
+        elements.errorContainer.innerHTML = '';
+      }, 5000);
+    }
+
+    // Loading indikatorni boshqarish
+    function showLoading(show) {
+      elements.loadingIndicator.style.display = show ? 'block' : 'none';
+    }
+
+    // Status yangilash
+    function updateStatus(message) {
+      elements.statusInfo.innerHTML = `<strong>Holat:</strong> ${message}`;
+    }
+
+    // Fayl yuklash funksiyasi
+    function handleFile(event) {
+      const file = event.target.files[0];
+      
+      if (!file) return;
+
+      // Fayl hajmini tekshirish (10MB limit)
+      if (file.size > 10 * 1024 * 1024) {
+        showError('Fayl hajmi juda katta (10MB dan oshmasligi kerak)');
+        return;
+      }
+
+      showLoading(true);
+      updateStatus('Fayl yuklanmoqda...');
+
+      const reader = new FileReader();
+      
+      reader.onload = function(e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          
+          if (workbook.SheetNames.length === 0) {
+            throw new Error('Excel faylda hech qanday sahifa topilmadi');
+          }
+
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+          
+          if (json.length < 2) {
+            throw new Error('Excel faylda ma\'lumotlar yetarli emas');
+          }
+
+          // Ma'lumotlarni qayta ishlash
+          locations = processExcelData(json);
+          
+          if (locations.length === 0) {
+            throw new Error('Hech qanday to\'g\'ri joylashuv ma\'lumoti topilmadi');
+          }
+
+          // Markerlarni xaritaga qo'shish
+          addMarkersToMap();
+          
+          // UI ni yangilash
+          elements.totalCount.textContent = locations.length;
+          elements.nextBtn.disabled = false;
+          elements.startBtn.disabled = false;
+          
+          updateStatus(`📊 ${locations.length} ta joylashuv yuklandi`);
+          showLoading(false);
+
+        } catch (error) {
+          console.error('Fayl yuklashda xatolik:', error);
+          showError(`❌ Fayl yuklashda xatolik: ${error.message}`);
+          showLoading(false);
+          updateStatus('❌ Fayl yuklanmagan');
+        }
+      };
+
+      reader.onerror = function() {
+        showError('❌ Faylni o\'qishda xatolik yuz berdi');
+        showLoading(false);
+        updateStatus('❌ Fayl yuklanmagan');
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    // Excel ma'lumotlarini qayta ishlash
+    function processExcelData(json) {
+      const processedLocations = [];
+      
+      for (let i = 1; i < json.length; i++) {
+        const row = json[i];
+        
+        if (!row || row.length < 3) continue;
+        
+        const name = row[0] ? row[0].toString().trim() : `Kamera ${i}`;
+        const address = row[1] ? row[1].toString().trim() : '';
+        const coordinates = row[2] ? row[2].toString().trim() : '';
+        
+        // Kamera ma'lumotlari (ixtiyoriy ustunlar)
+        const cameraType = row[3] ? row[3].toString().trim() : 'Noma\'lum';
+        const ipAddress = row[4] ? row[4].toString().trim() : '';
+        const username = row[5] ? row[5].toString().trim() : '';
+        const password = row[6] ? row[6].toString().trim() : '';
+        const port = row[7] ? row[7].toString().trim() : '80';
+        const status = row[8] ? row[8].toString().trim() : 'Nosoz';
+        const installDate = row[9] ? row[9].toString().trim() : '';
+        const notes = row[10] ? row[10].toString().trim() : '';
+        
+        if (!coordinates) continue;
+        
+        const coords = coordinates.split(',');
+        
+        if (coords.length !== 2) continue;
+        
+        const lat = parseFloat(coords[0].trim());
+        const lng = parseFloat(coords[1].trim());
+        
+        // Koordinatalarni tekshirish
+        if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          console.warn(`Noto'g'ri koordinata: ${coordinates} (qator ${i + 1})`);
+          continue;
+        }
+        
+        processedLocations.push({
+          id: i,
+          name: name,
+          address: address,
+          lat: lat,
+          lng: lng,
+          visited: false,
+          // Kamera ma'lumotlari
+          cameraType: cameraType,
+          ipAddress: ipAddress,
+          username: username,
+          password: password,
+          port: port,
+          status: status,
+          installDate: installDate,
+          notes: notes
+        });
+      }
+      
+      return processedLocations;
+    }
+
+    // Markerlarni xaritaga qo'shish
+    function addMarkersToMap() {
+      // Eski markerlarni o'chirish
+      locationMarkers.forEach(marker => map.removeLayer(marker));
+      locationMarkers = [];
+      
+      locations.forEach((location, index) => {
+        const marker = L.marker([location.lat, location.lng], {
+          icon: L.icon({
+            iconUrl: location.visited 
+              ? "https://cdn-icons-png.flaticon.com/512/1828/1828640.png" 
+              : (location.status.toLowerCase() === 'nosoz' 
+                  ? "https://cdn-icons-png.flaticon.com/512/5278/5278656.png"
+                  : "https://cdn-icons-png.flaticon.com/512/684/684908.png"),
+            iconSize: [35, 35],
+            iconAnchor: [17, 17]
+          })
+        }).addTo(map);
+        
+        // Kamera ma'lumotlari bilan popup
+        const popupContent = createCameraPopup(location);
+        marker.bindPopup(popupContent);
+        
+        // Marker click event
+        marker.on('click', function() {
+          showCameraDetails(location);
+        });
+        
+        locationMarkers.push(marker);
+      });
+      
+      // Xaritani barcha nuqtalarni ko'rsatish uchun moslash
+      if (locations.length > 0) {
+        const group = new L.featureGroup(locationMarkers);
+        map.fitBounds(group.getBounds().pad(0.1));
+      }
+    }
+
+    // Yo'nalishni chizish
+    function drawRouteTo(target) {
+      if (!navigator.geolocation) {
+        showError('GPS yoqilmagan yoki mavjud emas!');
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        function(position) {
+          const userLatLng = L.latLng(position.coords.latitude, position.coords.longitude);
+          const targetLatLng = L.latLng(target.lat, target.lng);
+          
+          // GPS aniqlik ma'lumotini yangilash
+          updateGPSAccuracy(position.coords.accuracy);
+
+          // Eski yo'nalishni xavfsiz o'chirish
+          if (routeControl) {
+            try {
+              map.removeControl(routeControl);
+              routeControl = null;
+            } catch (error) {
+              console.warn('Route control o\'chirishda xatolik:', error);
+              routeControl = null;
+            }
+          }
+
+          // Yangi yo'nalish
+          try {
+            routeControl = L.Routing.control({
+              waypoints: [userLatLng, targetLatLng],
+              routeWhileDragging: false,
+              addWaypoints: false,
+              createMarker: function() { return null; }, // Yo'nalish markerlarini yashirish
+              lineOptions: {
+                styles: [{ color: '#007bff', weight: 5, opacity: 0.8 }]
+              },
+              router: L.Routing.osrmv1({
+                serviceUrl: 'https://router.project-osrm.org/route/v1',
+                profile: 'driving'
+              }),
+              show: false,
+              collapsible: false,
+              draggableWaypoints: false
+            });
+
+            routeControl.addTo(map);
+            
+            // Route xatoliklarini boshqarish
+            routeControl.on('routingerror', function(e) {
+              console.error('Routing xatoligi:', e);
+              showError('Yo\'nalish topib bo\'lmadi. Muqobil yo\'l ko\'rsatiladi.');
+              useAlternativeRouting(userLatLng, targetLatLng);
+            });
+            
+          } catch (error) {
+            console.error('Route control yaratishda xatolik:', error);
+            showError('Yo\'nalish chizishda xatolik yuz berdi');
+            return;
+          }
+
+          // Foydalanuvchi pozitsiyasini yangilash
+          updateUserMarker(userLatLng);
+          
+          // Joriy manzilni yangilash
+          elements.currentAddress.textContent = `${target.name} - ${target.address}`;
+          
+          // Kamera ma'lumotlarini ko'rsatish
+          showCameraDetails(target);
+          
+          // Maqsadga yetish masofasini tekshirish
+          const distance = userLatLng.distanceTo(targetLatLng);
+          if (distance < 50) { // 50 metr yaqinlashganda
+            showTemporaryMessage(`🎯 ${target.name} kamerasiga yetib keldingiz!`, 'success');
+          }
+          
+          map.setView(userLatLng, 17); // Zoom darajasini oshirish
+        },
+        function(error) {
+          let errorMessage = 'Joylashuvni aniqlab bo\'lmadi: ';
+          switch(error.code) {
+            case error.PERMISSION_DENIED:
+              errorMessage += 'GPS ruxsati berilmagan';
+              break;
+            case error.POSITION_UNAVAILABLE:
+              errorMessage += 'Joylashuv ma\'lumoti mavjud emas';
+              break;
+            case error.TIMEOUT:
+              errorMessage += 'Vaqt tugadi';
+              break;
+            default:
+              errorMessage += 'Noma\'lum xatolik';
+              break;
+          }
+          showError(errorMessage);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 10000  // 10 soniya cache
+        }
+      );
+    }
+
+    // Foydalanuvchi markerini yangilash
+    function updateUserMarker(latlng) {
+      if (!userMarker) {
+        userMarker = L.marker(latlng, {
+          icon: L.icon({
+            iconUrl: "https://cdn-icons-png.flaticon.com/512/744/744465.png",
+            iconSize: [40, 40],
+            iconAnchor: [20, 20]
+          })
+        }).addTo(map);
+        userMarker.bindPopup("Sizning joylashuvingiz");
+      } else {
+        userMarker.setLatLng(latlng);
+      }
+    }
+
+    // Keyingi nuqtaga o'tish
+    function nextPoint() {
+      if (currentIndex >= locations.length) {
+        updateStatus('Barcha nuqtalarga tashrif buyurildi!');
+        elements.nextBtn.disabled = true;
+        return;
+      }
+
+      const currentLocation = locations[currentIndex];
+      currentLocation.visited = true;
+      
+      // Markerni yangilash
+      if (locationMarkers[currentIndex]) {
+        locationMarkers[currentIndex].setIcon(L.icon({
+          iconUrl: "https://cdn-icons-png.flaticon.com/512/1828/1828640.png",
+          iconSize: [35, 35],
+          iconAnchor: [17, 17]
+        }));
+      }
+      
+      drawRouteTo(currentLocation);
+      currentIndex++;
+      
+      elements.currentIndex.textContent = currentIndex;
+      
+      if (currentIndex >= locations.length) {
+        elements.nextBtn.textContent = 'Tugallandi';
+        elements.nextBtn.disabled = true;
+        updateStatus('Barcha nuqtalarga tashrif buyurildi!');
+      }
+    }
+
+    // Yo'nalishni boshlash
+    function startNavigation() {
+      if (locations.length === 0) {
+        showError('Avval Excel fayl yuklang!');
+        return;
+      }
+      
+      currentIndex = 0;
+      elements.currentIndex.textContent = '0';
+      isNavigationActive = true;
+      
+      // Foydalanuvchini kuzatishni boshlash
+      startTrackingUser();
+      
+      updateStatus('Yo\'nalish boshlandi');
+      nextPoint();
+    }
+
+    // Yo'nalishni qayta boshlash
+    function resetNavigation() {
+      currentIndex = 0;
+      isNavigationActive = false;
+      
+      // Kuzatuvni to'xtatish
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      
+      // Route control ni xavfsiz o'chirish
+      if (routeControl) {
+        try {
+          map.removeControl(routeControl);
+          routeControl = null;
+        } catch (error) {
+          console.warn('Route control o\'chirishda xatolik:', error);
+          routeControl = null;
+        }
+      }
+      
+      // Barcha joylashuvlarni tashrif buyurilmagan qilib belgilash
+      locations.forEach(location => location.visited = false);
+      
+      // Markerlarni qayta yuklash
+      if (locations.length > 0) {
+        addMarkersToMap();
+      }
+      
+      // UI ni qayta tiklash
+      elements.currentIndex.textContent = '0';
+      elements.nextBtn.disabled = locations.length === 0;
+      elements.nextBtn.textContent = `Keyingisi (0/${locations.length})`;
+      elements.currentAddress.textContent = '-';
+      
+      updateStatus(locations.length > 0 ? 'Qayta boshlashga tayyor' : 'Fayl yuklanmagan');
+    }
+
+    // Foydalanuvchini kuzatish
+    function startTrackingUser() {
+      if (!navigator.geolocation) {
+        showError('GPS mavjud emas!');
+        return;
+      }
+
+      watchId = navigator.geolocation.watchPosition(
+        function(position) {
+          const latlng = [position.coords.latitude, position.coords.longitude];
+          updateUserMarker(L.latLng(latlng[0], latlng[1]));
+          
+          // GPS aniqlik ma'lumotini yangilash
+          updateGPSAccuracy(position.coords.accuracy);
+          
+          // Yaqin kameralarga ogohlantirishni tekshirish
+          checkNearbyCamera(latlng[0], latlng[1]);
+        },
+        function(error) {
+          console.error("Joylashuvni kuzatishda xatolik:", error);
+          elements.gpsAccuracy.textContent = "❌ GPS xatolik";
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 5000,  // 5 soniya cache
+          timeout: 20000
+        }
+      );
+    }
+
+    // Sahifa yopilganda kuzatuvni to'xtatish
+    window.addEventListener('beforeunload', function() {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      
+      // Route control ni tozalash
+      if (routeControl) {
+        try {
+          map.removeControl(routeControl);
+        } catch (error) {
+          console.warn('Sahifa yopilganda route control tozalashda xatolik:', error);
+        }
+      }
+    });
+
+    // Alternative routing service (agar OSRM ishlamasa)
+    function useAlternativeRouting(userLatLng, targetLatLng) {
+      // Oddiy chiziq yo'nalishi
+      const routeLine = L.polyline([userLatLng, targetLatLng], {
+        color: '#ff6b6b',
+        weight: 4,
+        opacity: 0.7,
+        dashArray: '10, 10'
+      }).addTo(map);
+      
+      // Popup qo'shish
+      const distance = userLatLng.distanceTo(targetLatLng);
+      const distanceKm = (distance / 1000).toFixed(2);
+      
+      routeLine.bindPopup(`
+        <b>To'g'ri yo'nalish</b><br>
+        Masofa: ${distanceKm} km<br>
+        <small>Bu faqat to'g'ri chiziq masofasi</small>
+      `);
+      
+      // Eski route line ni saqlash (keyingi marta o'chirish uchun)
+      if (window.currentRouteLine) {
+        map.removeLayer(window.currentRouteLine);
+      }
+      window.currentRouteLine = routeLine;
+      
+      showError('Yo\'nalish xizmati vaqtincha ishlamayapti. To\'g\'ri chiziq ko\'rsatildi.');
+    }
+
+    // Dastlabki holat
+    updateStatus('📱 Excel fayl yuklang');
+    
+    // Mobile panel toggle functionality
+    let panelCollapsed = false;
+    
+    function toggleControlPanel() {
+      const panel = document.querySelector('.control-panel');
+      const toggleBtn = document.getElementById('togglePanel');
+      
+      if (panelCollapsed) {
+        panel.style.transform = 'translateY(0)';
+        toggleBtn.textContent = '📱 Yashirish';
+        panelCollapsed = false;
+      } else {
+        panel.style.transform = 'translateY(-70%)';
+        toggleBtn.textContent = '📱 Ko\'rsatish';
+        panelCollapsed = true;
+      }
+    }
+    
+    // Show toggle button on mobile
+    if (window.innerWidth <= 480) {
+      document.getElementById('togglePanel').style.display = 'block';
+    }
+    
+    // Handle orientation change
+    window.addEventListener('orientationchange', function() {
+      setTimeout(() => {
+        map.invalidateSize();
+        if (locations.length > 0) {
+          const group = new L.featureGroup(locationMarkers);
+          map.fitBounds(group.getBounds().pad(0.1));
+        }
+      }, 500);
+    });
+    
+    // Prevent zoom on double tap
+    map.doubleClickZoom.disable();
+    
+    // Enable better touch experience
+    map.on('click', function() {
+      if (window.innerWidth <= 480 && !panelCollapsed) {
+        toggleControlPanel();
+      }
+    });
+  </script>
+</body>
+</html>
